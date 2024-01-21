@@ -50,40 +50,34 @@ public class PixelsCacheWriter
 {
     private final static Logger logger = LogManager.getLogger(PixelsCacheWriter.class);
 
-    private final MemoryMappedFile cacheFile;
-    private final MemoryMappedFile indexFile;
+    private final List<PixelsZoneWriter> zones;
+    private final MemoryMappedFile globalIndexFile;
+    private final PixelsHashMap indexHashMap;
     private final Storage storage;
     private final EtcdUtil etcdUtil;
     /**
      * The host name of the node where this cache writer is running.
      */
     private final String host;
-    /**
-     * Call beginIndexWrite() before changing radix, which is shared by all threads.
-     */
-    private PixelsRadix radix;
-    private long currentIndexOffset;
-    private long allocatedIndexOffset = PixelsCacheUtil.INDEX_RADIX_OFFSET;
-    private long cacheOffset = PixelsCacheUtil.CACHE_DATA_OFFSET; // this is only used in the write() method.
     private ByteBuffer nodeBuffer = ByteBuffer.allocate(8 * 256);
     private ByteBuffer cacheIdxBuffer = ByteBuffer.allocate(PixelsCacheIdx.SIZE);
     private Set<String> cachedColumnChunks = new HashSet<>();
 
-    private PixelsCacheWriter(MemoryMappedFile cacheFile,
-                              MemoryMappedFile indexFile,
+    private PixelsCacheWriter(List<PixelsZoneWriter> zones,
+                              MemoryMappedFile globalIndexFile,
+                              PixelsHashMap indexHashMap,
                               Storage storage,
-                              PixelsRadix radix,
                               Set<String> cachedColumnChunks,
                               EtcdUtil etcdUtil,
                               String host)
     {
-        this.cacheFile = cacheFile;
-        this.indexFile = indexFile;
+        this.zones= zones;
         this.storage = storage;
-        this.radix = radix;
         this.etcdUtil = etcdUtil;
         this.host = host;
         this.nodeBuffer.order(ByteOrder.BIG_ENDIAN);
+        this.globalIndexFile = globalIndexFile;
+        this.indexHashMap = indexHashMap;
         if (cachedColumnChunks != null && cachedColumnChunks.isEmpty() == false)
         {
             cachedColumnChunks.addAll(cachedColumnChunks);
@@ -92,36 +86,36 @@ public class PixelsCacheWriter
 
     public static class Builder
     {
-        private String builderCacheLocation = "";
-        private long builderCacheSize;
+        private String builderZoneLocation = "";
+        private long builderZoneSize;
         private String builderIndexLocation = "";
         private long builderIndexSize;
         private boolean builderOverwrite = true;
         private String builderHostName = null;
         private PixelsCacheConfig cacheConfig = null;
+        private int zoneNum = 1;
 
         private Builder()
         {
         }
 
-        public PixelsCacheWriter.Builder setCacheLocation(String cacheLocation)
+        public Builder setZoneLocation(String zoneLocation)
         {
-            checkArgument(cacheLocation != null && !cacheLocation.isEmpty(),
+            checkArgument(zoneLocation != null && !zoneLocation.isEmpty(),
                     "cache location should bot be empty");
-            this.builderCacheLocation = cacheLocation;
+            this.builderZoneLocation = zoneLocation;
 
             return this;
         }
 
-        public PixelsCacheWriter.Builder setCacheSize(long cacheSize)
+        public Builder setZoneSize(long zoneSize)
         {
-            checkArgument(cacheSize > 0, "cache size should be positive");
-            this.builderCacheSize = cacheSize;
-
+            checkArgument(zoneSize > 0, "cache size should be positive");
+            this.builderZoneSize = zoneSize;
             return this;
         }
 
-        public PixelsCacheWriter.Builder setIndexLocation(String indexLocation)
+        public Builder setIndexLocation(String indexLocation)
         {
             checkArgument(indexLocation != null && !indexLocation.isEmpty(),
                     "index location should not be empty");
@@ -130,7 +124,7 @@ public class PixelsCacheWriter
             return this;
         }
 
-        public PixelsCacheWriter.Builder setIndexSize(long size)
+        public Builder setIndexSize(long size)
         {
             checkArgument(size > 0, "index size should be positive");
             this.builderIndexSize = size;
@@ -138,41 +132,57 @@ public class PixelsCacheWriter
             return this;
         }
 
-        public PixelsCacheWriter.Builder setOverwrite(boolean overwrite)
+        public Builder setOverwrite(boolean overwrite)
         {
             this.builderOverwrite = overwrite;
             return this;
         }
 
-        public PixelsCacheWriter.Builder setHostName(String hostName)
+        public Builder setHostName(String hostName)
         {
             checkArgument(hostName != null, "hostname should not be null");
             this.builderHostName = hostName;
             return this;
         }
 
-        public PixelsCacheWriter.Builder setCacheConfig(PixelsCacheConfig cacheConfig)
+        public Builder setCacheConfig(PixelsCacheConfig cacheConfig)
         {
             checkArgument(cacheConfig != null, "cache config should not be null");
             this.cacheConfig = cacheConfig;
             return this;
         }
 
+        public Builder setZoneNum(int zoneNum)
+        {
+            checkArgument(zoneNum > 0, "zone number should be positive");
+            this.zoneNum=zoneNum;
+            return this;
+        }
+
         public PixelsCacheWriter build()
                 throws Exception
         {
-            MemoryMappedFile cacheFile = new MemoryMappedFile(builderCacheLocation, builderCacheSize);
-            MemoryMappedFile indexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
-            PixelsRadix radix;
-            // check if cache and index exists.
+            List<PixelsZoneWriter> zones = new ArrayList<>(zoneNum);
+            for(int i=0; i<zoneNum; i++)
+            {
+                zones.add(new PixelsZoneWriter(builderZoneLocation+"."+String.valueOf(i),builderIndexLocation+"."+String.valueOf(i),builderZoneSize,builderIndexSize));
+            }
+
+            MemoryMappedFile globalIndexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
+            PixelsHashMap indexHashMap;
             Set<String> cachedColumnChunks = new HashSet<>();
+            // check if cache and index exists.
             // if overwrite is not true, and cache and index file already exists, reconstruct radix from existing index.
-            if (!builderOverwrite && PixelsCacheUtil.checkMagic(indexFile) && PixelsCacheUtil.checkMagic(cacheFile))
+            if (!builderOverwrite && PixelsZoneUtil.checkMagic(globalIndexFile) && PixelsZoneUtil.checkMagic(globalIndexFile))
             {
                 // cache exists in local cache file and index, reload the index.
-                radix = PixelsCacheUtil.loadRadixIndex(indexFile);
+                indexHashMap.loadHashMapIndex(globalIndexFile);
+                for(PixelsZoneWriter zone:zones)
+                {
+                    zone.loadIndex();
+                }
                 // build cachedColumnChunks for PixelsCacheWriter.
-                int cachedVersion = PixelsCacheUtil.getIndexVersion(indexFile);
+                int cachedVersion = PixelsZoneUtil.getIndexVersion(globalIndexFile);
                 MetadataService metadataService = new MetadataService(
                         cacheConfig.getMetaHost(), cacheConfig.getMetaPort());
                 Layout cachedLayout = metadataService.getLayout(
@@ -182,17 +192,26 @@ public class PixelsCacheWriter
                 cachedColumnChunks.addAll(compact.getColumnChunkOrder().subList(0, cacheBorder));
                 metadataService.shutdown();
             }
-            //   else, create a new radix tree, and initialize the index and cache file.
             else
             {
-                radix = new PixelsRadix();
-                PixelsCacheUtil.initialize(indexFile, cacheFile);
+                indexHashMap = new PixelsHashMap();
+                PixelsZoneUtil.initializeIndex(globalIndexFile);
+                for(PixelsZoneWriter zone:zones)
+                {
+                    zone.buildIndex(cacheConfig);
+                }
             }
+
+            if(zoneNum > 1)
+            {
+                PixelsZoneUtil.setZoneTypeSwap(zones.get(zoneNum-1).getZoneFile());
+            }
+
             EtcdUtil etcdUtil = EtcdUtil.Instance();
 
             Storage storage = StorageFactory.Instance().getStorage(cacheConfig.getStorageScheme());
 
-            return new PixelsCacheWriter(cacheFile, indexFile, storage, radix,
+            return new PixelsCacheWriter(zones, globalIndexFile,indexHashMap,storage,
                     cachedColumnChunks, etcdUtil, builderHostName);
         }
     }
@@ -202,19 +221,21 @@ public class PixelsCacheWriter
         return new Builder();
     }
 
-    public MemoryMappedFile getIndexFile()
+    public MemoryMappedFile getIndexFile(int zoneId)
     {
-        return indexFile;
+        return zones.get(zoneId).getIndexFile();
     }
 
+/*
     /**
      * DO NOT USE THIS METHOD. Only for unit test.
      * @return
-     */
+     * /
     public PixelsRadix getRadix()
     {
         return this.radix;
     }
+*/
 
     /**
      * <p>
@@ -249,15 +270,36 @@ public class PixelsCacheWriter
         }
     }
 
+    /**
+     * return true if all the zones are empty
+     */
     public boolean isCacheEmpty ()
     {
         /**
          * There are no concurrent updates on the cache,
          * thus we don't have to synchronize the access to cachedColumnChunks.
          */
-        return PixelsCacheUtil.getCacheStatus(this.cacheFile) == PixelsCacheUtil.CacheStatus.EMPTY.getId() &&
-                PixelsCacheUtil.getCacheSize(this.cacheFile) == 0;
+        for(PixelsZoneWriter zone:zones)
+        {
+            if(!zone.isZoneEmpty())
+            {
+                return false;
+            }
+        }
+        return true;
         // return cachedColumnChunks == null || cachedColumnChunks.isEmpty();
+    }
+
+    public boolean isExistZoneEmpty ()
+    {
+        for(PixelsZoneWriter zone:zones)
+        {
+            if(zone.isZoneEmpty())
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -296,10 +338,11 @@ public class PixelsCacheWriter
         }
     }
 
+/*
     /**
      * Currently, this is an interface for unit tests.
      * This method only updates index content and cache content (without touching headers)
-     */
+     * /
     public void write(PixelsCacheKey key, byte[] value)
     {
         PixelsCacheIdx cacheIdx = new PixelsCacheIdx(cacheOffset, value.length);
@@ -307,6 +350,7 @@ public class PixelsCacheWriter
         cacheOffset += value.length;
         radix.put(key, cacheIdx);
     }
+*/
 
     /**
      * Currently, this is an interface for unit tests.
@@ -334,7 +378,7 @@ public class PixelsCacheWriter
              * 2. Wait for the existing readers to finish, i.e.
              *    wait for the readCount to be cleared (become zero).
              */
-            PixelsCacheUtil.beginIndexWrite(indexFile);
+            PixelsZoneUtil.beginIndexWrite(globalIndexFile);
         } catch (InterruptedException e)
         {
             status = -1;
@@ -351,8 +395,8 @@ public class PixelsCacheWriter
         {
             cachedColumnChunks.clear();
         }
-        radix.removeAll();
-        long currCacheOffset = PixelsCacheUtil.CACHE_DATA_OFFSET;
+        indexHashMap.clear();
+        long currCacheOffset = PixelsZoneUtil.ZONE_DATA_OFFSET;
         boolean enableAbsoluteBalancer = Boolean.parseBoolean(
                 ConfigFactory.Instance().getProperty("enable.absolute.balancer"));
         outer_loop:
@@ -373,6 +417,9 @@ public class PixelsCacheWriter
                 String[] columnChunkIdStr = cacheColumnChunkOrders.get(i).split(":");
                 short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                 short columnId = Short.parseShort(columnChunkIdStr[1]);
+
+
+                
                 PixelsProto.RowGroupFooter rowGroupFooter = pixelsPhysicalReader.readRowGroupFooter(rowGroupId);
                 PixelsProto.ColumnChunkIndex chunkIndex =
                         rowGroupFooter.getRowGroupIndexEntry().getColumnChunkIndexEntries(columnId);
@@ -809,7 +856,9 @@ public class PixelsCacheWriter
     public void close()
             throws Exception
     {
-        indexFile.unmap();
-        cacheFile.unmap();
+        for(PixelsCacheZoneWriter zone:zones){
+            zone.close();
+        }
+        globalIndexFile.unmap();
     }
 }
