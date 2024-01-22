@@ -19,32 +19,19 @@
  */
 package io.pixelsdb.pixels.cache;
 
-import io.pixelsdb.pixels.common.physical.natives.MemoryMappedFile;
-
-import java.util.HashMap;
-
 /**
  * Created at: 2024/1/20
  *
  * @author alph00
  */
-class PixelsHashMap {
-    HashMap<PixelsCacheKey, Integer> hashMap;
-
-    PixelsHashMap() {
-        hashMap = new HashMap<>();
-    }
-
-    //TODO: load hashmap index
-    public void loadHashMapIndex(MemoryMappedFile indexFile) {
-        hashMap = new HashMap<>();
-    }
-
-    public void put(PixelsCacheKey key, Integer value) {
-        hashMap.put(key, value);
-    }
-
-    public void clear() {
-        hashMap.clear();
+class PixelsHasher {
+    public static int getHash(PixelsCacheKey key) {
+        String keyString = key.toString();
+        byte[] bytes = keyString.getBytes();
+        int var1 = 1;
+        for (int var3 = 0; var3 < bytes.length; ++var3) {
+            var1 = 31 * var1 + bytes[var3];
+        }
+        return var1;
     }
 }
