@@ -19,23 +19,34 @@
  */
 package io.pixelsdb.pixels.cache;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Created at: 2024/1/20
  *
  * @author alph00
  */
 class PixelsHasher {
+    private static int bucketNum = 0;
+    
+    private static List<Integer> buketIds = new ArrayList<>();
+    
     public static int getBucketNum() {
         return bucketNum;
     }
-
+    
     public static void setBucketNum(int bucketNum) {
         PixelsHasher.bucketNum = bucketNum;
     }
 
-    private static int bucketNum = 0;
+    public static void setBuketIds(List<Integer> buketIds) {
+        PixelsHasher.buketIds = buketIds;
+    }
 
-    private static
+    public static List<Integer> getBuketIds() {
+        return buketIds;
+    }
 
     public static int getHash(PixelsCacheKey key) {
         String keyString = key.toString();

@@ -469,13 +469,16 @@ public class PixelsCacheWriter
         }
         logger.debug("Cache writer ends at offset: " + currCacheOffset);
         // flush index
-        flush();
+        for(Integer zoneId:zoneTypeInfo.getLazyZoneIds())
+        {
+            zones.get(zoneId).flushIndex();
+        }
         // update cache version
         PixelsZoneUtil.setIndexVersion(globalIndexFile, version);
-        for(PixelsZoneWriter zone:zones)
+        for(Integer zoneId:zoneTypeInfo.getLazyZoneIds())
         {
-            PixelsZoneUtil.setStatus(zone.getZoneFile(), PixelsZoneUtil.ZoneStatus.OK.getId());
-            PixelsZoneUtil.setSize(zone.getZoneFile(), currCacheOffset);
+            PixelsZoneUtil.setStatus(zones.get(zoneId).getZoneFile(), PixelsZoneUtil.ZoneStatus.OK.getId());
+            PixelsZoneUtil.setSize(zones.get(zoneId).getZoneFile(), currCacheOffset);
         }
         // set rwFlag as readable
         PixelsZoneUtil.endIndexWrite(globalIndexFile);
