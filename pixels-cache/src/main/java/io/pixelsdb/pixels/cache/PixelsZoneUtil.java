@@ -42,7 +42,7 @@ class PixelsZoneUtil {
     /**
      * Issue #88:
      * Do not use 2 ^ n - 1, it is not latex :)
-     *
+     * <p>
      * Issue #91:
      * Use three bytes, instead of two bytes, for reader count.
      * The following masks and const numbers are also changed accordingly.
@@ -133,16 +133,28 @@ class PixelsZoneUtil {
         setIndexVersion(indexFile, 0);
     }
 
-    public static void initialize(MemoryMappedFile indexFile, MemoryMappedFile zoneFile) {
+    public static void initializeLazy(MemoryMappedFile indexFile, MemoryMappedFile zoneFile) {
         // init index
         setMagic(indexFile);
         clearIndexRWAndCount(indexFile);
         // setIndexVersion(indexFile, 0);
         // init zone
         setMagic(zoneFile);
-        setStatus(zoneFile, PixelsCacheUtil.CacheStatus.EMPTY.getId());
+        setStatus(zoneFile, PixelsZoneUtil.ZoneStatus.EMPTY.getId());
         setSize(zoneFile, 0);
         setType(zoneFile, ZoneType.LAZY.getId());
+    }
+
+    public static void initializeSwap(MemoryMappedFile indexFile, MemoryMappedFile zoneFile) {
+        // init index
+        setMagic(indexFile);
+        clearIndexRWAndCount(indexFile);
+        // setIndexVersion(indexFile, 0);
+        // init zone
+        setMagic(zoneFile);
+        setStatus(zoneFile, PixelsZoneUtil.ZoneStatus.EMPTY.getId());
+        setSize(zoneFile, 0);
+        setType(zoneFile, ZoneType.SWAP.getId());
     }
 
     public static void setIndexVersion(MemoryMappedFile indexFile, int version) {
@@ -181,6 +193,7 @@ class PixelsZoneUtil {
 
     /**
      * Read radix from index file.
+     *
      * @param indexFile the index file to be read.
      * @return the radix tree read from index file.
      */
@@ -192,10 +205,11 @@ class PixelsZoneUtil {
 
     /**
      * Read and construct the index from index file.
-     * @param indexFile the index file to be read.
+     *
+     * @param indexFile  the index file to be read.
      * @param nodeOffset the offset of the current root node of the free (or sub-tree).
-     * @param node the current root node to be read from index file.
-     * @param level the current level of the node, starts from 1 for root of the tree.
+     * @param node       the current root node to be read from index file.
+     * @param level      the current level of the node, starts from 1 for root of the tree.
      */
     private static void readRadix(MemoryMappedFile indexFile, long nodeOffset,
                                   RadixNode node, int level) throws CacheException {
@@ -220,10 +234,11 @@ class PixelsZoneUtil {
 
     /**
      * Read the index node from index file.
-     * @param indexFile the index file to be read.
+     *
+     * @param indexFile  the index file to be read.
      * @param nodeOffset the offset of this node in index file.
-     * @param node the node to be read from index file.
-     * @param level the current level of this node.
+     * @param node       the node to be read from index file.
+     * @param level      the current level of this node.
      * @return the children ids (1 byte leader + 7 bytes offset) of the node.
      */
     private static long[] readNode(MemoryMappedFile indexFile, long nodeOffset,
@@ -286,21 +301,29 @@ class PixelsZoneUtil {
         file.setLongVolatile(8, size);
     }
 
-    public static void setType(MemoryMappedFile file, short type) {
-        file.setShortVolatile(16, type);
-    }
-
     public static long getSize(MemoryMappedFile file) {
         return file.getLongVolatile(8);
     }
 
+    public static void setType(MemoryMappedFile file, short type) {
+        file.setShortVolatile(16, type);
+    }
+
+    public static short getType(MemoryMappedFile file) {
+        return file.getShortVolatile(16);
+    }
+
+/*
     public static void setZoneTypeLazy(MemoryMappedFile file) {
         setType(file, ZoneType.LAZY.getId());
     }
+*/
 
+/*
     public static void setZoneTypeSwap(MemoryMappedFile file) {
         setType(file, ZoneType.SWAP.getId());
     }
+*/
 
     public static void setZoneTypeEager(MemoryMappedFile file) {
         setType(file, ZoneType.EAGER.getId());
@@ -341,6 +364,7 @@ class PixelsZoneUtil {
 
     /**
      * Begin index read. This method will wait for the writer to finish.
+     *
      * @param indexFile
      * @return the time in millis as the lease of this index read.
      * @throws InterruptedException

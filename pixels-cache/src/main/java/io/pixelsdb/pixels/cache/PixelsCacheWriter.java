@@ -51,6 +51,7 @@ public class PixelsCacheWriter
     private final static Logger logger = LogManager.getLogger(PixelsCacheWriter.class);
 
     private final List<PixelsZoneWriter> zones;
+    private final PixelsZoneTypeInfo zoneTypeInfo;
     private final MemoryMappedFile globalIndexFile;
     private final Storage storage;
     private final EtcdUtil etcdUtil;
@@ -61,6 +62,7 @@ public class PixelsCacheWriter
     private Set<String> cachedColumnChunks = new HashSet<>();
 
     private PixelsCacheWriter(List<PixelsZoneWriter> zones,
+                              PixelsZoneTypeInfo zoneTypeInfo,
                               MemoryMappedFile globalIndexFile,
                               Storage storage,
                               Set<String> cachedColumnChunks,
@@ -72,6 +74,7 @@ public class PixelsCacheWriter
         this.etcdUtil = etcdUtil;
         this.host = host;
         this.globalIndexFile = globalIndexFile;
+        this.zoneTypeInfo = zoneTypeInfo;
         if (cachedColumnChunks != null && cachedColumnChunks.isEmpty() == false)
         {
             cachedColumnChunks.addAll(cachedColumnChunks);
@@ -88,6 +91,7 @@ public class PixelsCacheWriter
         private String builderHostName = null;
         private PixelsCacheConfig cacheConfig = null;
         private int zoneNum = 1;
+        private PixelsZoneTypeInfo zoneTypeInfo = null;
 
         private Builder()
         {
@@ -156,6 +160,8 @@ public class PixelsCacheWriter
         public PixelsCacheWriter build()
                 throws Exception
         {
+            zoneTypeInfo = PixelsZoneTypeInfo.newBuilder(zoneNum).build();
+
             List<PixelsZoneWriter> zones = new ArrayList<>(zoneNum);
             for(int i=0; i<zoneNum; i++)
             {
@@ -163,15 +169,33 @@ public class PixelsCacheWriter
             }
 
             MemoryMappedFile globalIndexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
+
             Set<String> cachedColumnChunks = new HashSet<>();
+
             // check if cache and index exists.
             // if overwrite is not true, and cache and index file already exists, reconstruct radix from existing index.
             if (!builderOverwrite && PixelsZoneUtil.checkMagic(globalIndexFile) && PixelsZoneUtil.checkMagic(globalIndexFile))
             {
                 // cache exists in local cache file and index, reload the index.
-                for(PixelsZoneWriter zone:zones)
+                for(int i=0; i<zoneNum; i++)
                 {
-                    zone.loadIndex();
+                    zones.get(i).loadIndex();
+                    switch (zones.get(i).getZoneType()){
+                        case LAZY:
+                            zoneTypeInfo.incrementLazyZoneNum();
+                            zoneTypeInfo.getLazyZoneIds().add(i);
+                            break;
+                        case SWAP:
+                            zoneTypeInfo.incrementSwapZoneNum();
+                            zoneTypeInfo.getSwapZoneIds().add(i);
+                            break;
+                        case EAGER:
+                            zoneTypeInfo.incrementEagerZoneNum();
+                            zoneTypeInfo.getEagerZoneIds().add(i);
+                            break;
+                        default:
+                            logger.warn("zone type error");
+                    }
                 }
                 // build cachedColumnChunks for PixelsCacheWriter.
                 int cachedVersion = PixelsZoneUtil.getIndexVersion(globalIndexFile);
@@ -187,22 +211,26 @@ public class PixelsCacheWriter
             else
             {
                 PixelsZoneUtil.initializeIndex(globalIndexFile);
-                for(PixelsZoneWriter zone:zones)
+                zoneTypeInfo.setLazyZoneNum(zoneNum - 1);
+                zoneTypeInfo.getLazyZoneIds().addAll(new ArrayList<Integer>(){{for(int i=0;i<zoneNum-1;i++)add(i);}});
+                for (int i = 0; i < zoneNum - 1; i++)
                 {
-                    zone.buildIndex(cacheConfig);
+                    zones.get(i).buildLazy(cacheConfig);
                 }
+                // initialize swap zone
+                zoneTypeInfo.setSwapZoneNum(1);
+                zoneTypeInfo.getSwapZoneIds().add(zoneNum - 1);
+                zones.get(zoneNum - 1).buildSwap(cacheConfig);
             }
 
-            if(zoneNum > 1)
-            {
-                PixelsZoneUtil.setZoneTypeSwap(zones.get(zoneNum-1).getZoneFile());
-            }
+            // initialize the hashFunction with the number of zones.
+            PixelsHasher.setBucketNum(zoneTypeInfo.getLazyZoneNum());
 
             EtcdUtil etcdUtil = EtcdUtil.Instance();
 
             Storage storage = StorageFactory.Instance().getStorage(cacheConfig.getStorageScheme());
 
-            return new PixelsCacheWriter(zones, globalIndexFile,storage,
+            return new PixelsCacheWriter(zones, zoneTypeInfo,globalIndexFile,storage,
                     cachedColumnChunks, etcdUtil, builderHostName);
         }
     }
@@ -272,7 +300,7 @@ public class PixelsCacheWriter
          */
         for(PixelsZoneWriter zone:zones)
         {
-            if(!zone.isZoneEmpty())
+            if(zone.getZoneType() != PixelsZoneUtil.ZoneType.SWAP && !zone.isZoneEmpty())
             {
                 return false;
             }
@@ -285,7 +313,7 @@ public class PixelsCacheWriter
     {
         for(PixelsZoneWriter zone:zones)
         {
-            if(zone.isZoneEmpty())
+            if(zone.getZoneType() != PixelsZoneUtil.ZoneType.SWAP && zone.isZoneEmpty())
             {
                 return true;
             }
@@ -441,19 +469,16 @@ public class PixelsCacheWriter
         }
         logger.debug("Cache writer ends at offset: " + currCacheOffset);
         // flush index
-        for (PixelsZoneWriter zone:zones)
-        {
-            zone.flushIndex();
-        }
+        flush();
         // update cache version
-        PixelsCacheUtil.setIndexVersion(globalIndexFile, version);
+        PixelsZoneUtil.setIndexVersion(globalIndexFile, version);
         for(PixelsZoneWriter zone:zones)
         {
-            PixelsCacheUtil.setCacheStatus(zone.getZoneFile(), PixelsCacheUtil.CacheStatus.OK.getId());
-            PixelsCacheUtil.setCacheSize(zone.getZoneFile(), currCacheOffset);
+            PixelsZoneUtil.setStatus(zone.getZoneFile(), PixelsZoneUtil.ZoneStatus.OK.getId());
+            PixelsZoneUtil.setSize(zone.getZoneFile(), currCacheOffset);
         }
         // set rwFlag as readable
-        PixelsCacheUtil.endIndexWrite(globalIndexFile);
+        PixelsZoneUtil.endIndexWrite(globalIndexFile);
         // logger.debug("Cache index ends at offset: " + currentIndexOffset);
 
         return status;

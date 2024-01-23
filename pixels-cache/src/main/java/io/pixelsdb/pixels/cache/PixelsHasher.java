@@ -25,6 +25,18 @@ package io.pixelsdb.pixels.cache;
  * @author alph00
  */
 class PixelsHasher {
+    public static int getBucketNum() {
+        return bucketNum;
+    }
+
+    public static void setBucketNum(int bucketNum) {
+        PixelsHasher.bucketNum = bucketNum;
+    }
+
+    private static int bucketNum = 0;
+
+    private static
+
     public static int getHash(PixelsCacheKey key) {
         String keyString = key.toString();
         byte[] bytes = keyString.getBytes();
@@ -32,6 +44,6 @@ class PixelsHasher {
         for (int var3 = 0; var3 < bytes.length; ++var3) {
             var1 = 31 * var1 + bytes[var3];
         }
-        return var1;
+        return var1 % bucketNum;
     }
 }

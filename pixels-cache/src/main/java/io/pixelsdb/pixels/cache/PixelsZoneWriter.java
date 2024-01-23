@@ -49,9 +49,14 @@ public class PixelsZoneWriter {
         indexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
     }
 
-    public void buildIndex(PixelsCacheConfig cacheConfig) throws Exception {
+    public void buildLazy(PixelsCacheConfig cacheConfig) throws Exception {
         radix = new PixelsRadix();
-        PixelsZoneUtil.initialize(indexFile, zoneFile);
+        PixelsZoneUtil.initializeLazy(indexFile, zoneFile);
+    }
+
+    public void buildSwap(PixelsCacheConfig cacheConfig) throws Exception {
+        radix = new PixelsRadix();
+        PixelsZoneUtil.initializeSwap(indexFile, zoneFile);
     }
 
     public void loadIndex() throws Exception {
@@ -70,6 +75,16 @@ public class PixelsZoneWriter {
         return zoneFile;
     }
 
+    public PixelsZoneUtil.ZoneType getZoneType() {
+        if (PixelsZoneUtil.getType(this.zoneFile) == PixelsZoneUtil.ZoneType.LAZY.getId()) {
+            return PixelsZoneUtil.ZoneType.LAZY;
+        } else if (PixelsZoneUtil.getType(this.zoneFile) == PixelsZoneUtil.ZoneType.SWAP.getId()) {
+            return PixelsZoneUtil.ZoneType.SWAP;
+        } else {
+            return PixelsZoneUtil.ZoneType.EAGER;
+        }
+    }
+
     public boolean isZoneEmpty() {
         return PixelsZoneUtil.getStatus(this.zoneFile) == PixelsZoneUtil.ZoneStatus.EMPTY.getId() &&
                 PixelsZoneUtil.getSize(this.zoneFile) == 0;
@@ -78,14 +93,12 @@ public class PixelsZoneWriter {
     /**
      * Flush out index to index file from start.
      */
-    public void flushIndex()
-    {
+    public void flushIndex() {
         // set index content offset, skip the index header.
         currentIndexOffset = PixelsZoneUtil.INDEX_RADIX_OFFSET;
         allocatedIndexOffset = PixelsZoneUtil.INDEX_RADIX_OFFSET;
         // if root contains nodes, which means the tree is not empty,then write nodes.
-        if (radix.getRoot().getSize() != 0)
-        {
+        if (radix.getRoot().getSize() != 0) {
             writeRadix(radix.getRoot());
         }
     }
@@ -93,12 +106,9 @@ public class PixelsZoneWriter {
     /**
      * Write radix tree node.
      */
-    private void writeRadix(RadixNode node)
-    {
-        if (flushNode(node))
-        {
-            for (RadixNode n : node.getChildren().values())
-            {
+    private void writeRadix(RadixNode node) {
+        if (flushNode(node)) {
+            for (RadixNode n : node.getChildren().values()) {
                 writeRadix(n);
             }
         }
@@ -110,20 +120,15 @@ public class PixelsZoneWriter {
      * Header: isKey(1 bit) + edgeSize(22 bits) + childrenSize(9 bits)
      * Child: leader(1 byte) + child_offset(7 bytes)
      */
-    private boolean flushNode(RadixNode node)
-    {
+    private boolean flushNode(RadixNode node) {
         nodeBuffer.clear();
-        if (currentIndexOffset >= indexFile.getSize())
-        {
+        if (currentIndexOffset >= indexFile.getSize()) {
             logger.debug("Offset exceeds index size. Break. Current size: " + currentIndexOffset);
             return false;
         }
-        if (node.offset == 0)
-        {
+        if (node.offset == 0) {
             node.offset = currentIndexOffset;
-        }
-        else
-        {
+        } else {
             currentIndexOffset = node.offset;
         }
         allocatedIndexOffset += node.getLengthInBytes();
@@ -131,15 +136,13 @@ public class PixelsZoneWriter {
         int edgeSize = node.getEdge().length;
         header = header | (edgeSize << 9);
         int isKeyMask = 1 << 31;
-        if (node.isKey())
-        {
+        if (node.isKey()) {
             header = header | isKeyMask;
         }
         header = header | node.getChildren().size();
         indexFile.setInt(currentIndexOffset, header);  // header
         currentIndexOffset += 4;
-        for (Byte key : node.getChildren().keySet())
-        {   // children
+        for (Byte key : node.getChildren().keySet()) {   // children
             RadixNode n = node.getChild(key);
             int len = n.getLengthInBytes();
             n.offset = allocatedIndexOffset;
@@ -158,8 +161,7 @@ public class PixelsZoneWriter {
         currentIndexOffset += nodeBytes.length;
         indexFile.setBytes(currentIndexOffset, node.getEdge()); // edge
         currentIndexOffset += node.getEdge().length;
-        if (node.isKey())
-        {  // value
+        if (node.isKey()) {  // value
             node.getValue().getBytes(cacheIdxBuffer);
             indexFile.setBytes(currentIndexOffset, cacheIdxBuffer.array());
             currentIndexOffset += 12;
@@ -175,11 +177,9 @@ public class PixelsZoneWriter {
     /**
      * Traverse radix to get all cached values, and put them into cachedColumnChunks list.
      */
-    private void traverseRadix(List<PixelsCacheIdx> cacheIdxes)
-    {
+    private void traverseRadix(List<PixelsCacheIdx> cacheIdxes) {
         RadixNode root = radix.getRoot();
-        if (root.getSize() == 0)
-        {
+        if (root.getSize() == 0) {
             return;
         }
         visitRadix(cacheIdxes, root);
@@ -190,16 +190,13 @@ public class PixelsZoneWriter {
      * Maybe considering using a stack to store edge values along the visitation path.
      * Push edges in as going deeper, and pop out as going shallower.
      */
-    private void visitRadix(List<PixelsCacheIdx> cacheIdxes, RadixNode node)
-    {
-        if (node.isKey())
-        {
+    private void visitRadix(List<PixelsCacheIdx> cacheIdxes, RadixNode node) {
+        if (node.isKey()) {
             PixelsCacheIdx value = node.getValue();
             PixelsCacheIdx idx = new PixelsCacheIdx(value.offset, value.length);
             cacheIdxes.add(idx);
         }
-        for (RadixNode n : node.getChildren().values())
-        {
+        for (RadixNode n : node.getChildren().values()) {
             visitRadix(cacheIdxes, n);
         }
     }
