@@ -52,6 +52,7 @@ public class PixelsCacheWriter
 
     private final List<PixelsZoneWriter> zones;
     private final PixelsZoneTypeInfo zoneTypeInfo;
+    private final List<Integer> bucketToZoneMap;
     private final MemoryMappedFile globalIndexFile;
     private final Storage storage;
     private final EtcdUtil etcdUtil;
@@ -63,6 +64,7 @@ public class PixelsCacheWriter
 
     private PixelsCacheWriter(List<PixelsZoneWriter> zones,
                               PixelsZoneTypeInfo zoneTypeInfo,
+                              List<Integer> bucketToZoneMap,
                               MemoryMappedFile globalIndexFile,
                               Storage storage,
                               Set<String> cachedColumnChunks,
@@ -75,6 +77,7 @@ public class PixelsCacheWriter
         this.host = host;
         this.globalIndexFile = globalIndexFile;
         this.zoneTypeInfo = zoneTypeInfo;
+        this.bucketToZoneMap = bucketToZoneMap;
         if (cachedColumnChunks != null && cachedColumnChunks.isEmpty() == false)
         {
             cachedColumnChunks.addAll(cachedColumnChunks);
@@ -165,7 +168,7 @@ public class PixelsCacheWriter
             List<PixelsZoneWriter> zones = new ArrayList<>(zoneNum);
             for(int i=0; i<zoneNum; i++)
             {
-                zones.add(new PixelsZoneWriter(builderZoneLocation+"."+String.valueOf(i),builderIndexLocation+"."+String.valueOf(i),builderZoneSize,builderIndexSize));
+                zones.add(new PixelsZoneWriter(builderZoneLocation+"."+String.valueOf(i),builderIndexLocation+"."+String.valueOf(i),builderZoneSize,builderIndexSize,i));
             }
 
             MemoryMappedFile globalIndexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
@@ -230,7 +233,9 @@ public class PixelsCacheWriter
 
             Storage storage = StorageFactory.Instance().getStorage(cacheConfig.getStorageScheme());
 
-            return new PixelsCacheWriter(zones, zoneTypeInfo,globalIndexFile,storage,
+            List<Integer> bucketToZoneMap = new ArrayList<>(new ArrayList<Integer>(){{for(int i=0;i<zoneNum;i++)add(i);}});
+
+            return new PixelsCacheWriter(zones, zoneTypeInfo, bucketToZoneMap, globalIndexFile, storage,
                     cachedColumnChunks, etcdUtil, builderHostName);
         }
     }
@@ -439,7 +444,7 @@ public class PixelsCacheWriter
                 short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                 short columnId = Short.parseShort(columnChunkIdStr[1]);
                 PixelsCacheKey key = new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId);
-                int zoneId = PixelsHasher.getHash(key);
+                int zoneId = bucketToZoneMap.get(PixelsHasher.getHash(key));
                 PixelsProto.RowGroupFooter rowGroupFooter = pixelsPhysicalReader.readRowGroupFooter(rowGroupId);
                 PixelsProto.ColumnChunkIndex chunkIndex =
                         rowGroupFooter.getRowGroupIndexEntry().getColumnChunkIndexEntries(columnId);
@@ -522,7 +527,6 @@ public class PixelsCacheWriter
             }
         }
         this.cachedColumnChunks.clear();
-        PixelsRadix oldRadix = radix;
         List<PixelsCacheEntry> survivedIdxes = new ArrayList<>(survivedColumnChunks.size()*files.length);
         for (String file : files)
         {
@@ -535,7 +539,8 @@ public class PixelsCacheWriter
                 String[] columnChunkIdStr = survivedColumnChunk.split(":");
                 short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                 short columnId = Short.parseShort(columnChunkIdStr[1]);
-                PixelsCacheIdx curCacheIdx = oldRadix.get(blockId, rowGroupId, columnId);
+                int zoneId = bucketToZoneMap.get(PixelsHasher.getHash(new PixelsCacheKey(blockId, rowGroupId, columnId)));
+                PixelsCacheIdx curCacheIdx = zones.get(zoneId).getRadix().get(blockId, rowGroupId, columnId);
                 survivedIdxes.add(
                         new PixelsCacheEntry(new PixelsCacheKey(
                                 physicalReader.getCurrentBlockId(), rowGroupId, columnId), curCacheIdx));
@@ -548,41 +553,55 @@ public class PixelsCacheWriter
          * Start phase 1: compact the survived cache elements.
          */
         logger.debug("Start cache compaction...");
-        long newCacheOffset = PixelsCacheUtil.CACHE_DATA_OFFSET;
-        PixelsRadix newRadix = new PixelsRadix();
-        // set rwFlag as write
-        try
+        for(int i=0; i<zones.size(); ++i)
         {
-            /**
-             * Before updating the cache content, in beginIndexWrite:
-             * 1. Set rwFlag to block subsequent readers.
-             * 2. Wait for the existing readers to finish, i.e.
-             *    wait for the readCount to be cleared (become zero).
-             */
-            PixelsCacheUtil.beginIndexWrite(indexFile);
-        } catch (InterruptedException e)
-        {
-            status = -1;
-            logger.error("Failed to get write permission on index.", e);
-            return status;
+            PixelsZoneWriter zone = zones.get(i);
+            long newCacheOffset = PixelsZoneUtil.ZONE_DATA_OFFSET;
+            if(zone.getZoneType() != PixelsZoneUtil.ZoneType.LAZY){
+                continue;
+            }
+            PixelsZoneWriter swapZone = zones.get(zoneTypeInfo.getSwapZoneIds().get(0));
+            MemoryMappedFile swapIndexFile = swapZone.getIndexFile();
+            try
+            {
+                PixelsZoneUtil.beginIndexWrite(swapIndexFile);
+            }catch (InterruptedException e)
+            {
+                status = -1;
+                logger.error("Failed to get write permission on index.", e);
+                // TODO: other zones' recovery needed here.
+                return status;
+            }
+            for(PixelsCacheEntry survivedIdx:survivedIdxes)
+            {
+                if(bucketToZoneMap.get(PixelsHasher.getHash(survivedIdx.key)) != zone.getZoneId()){
+                    continue;
+                }
+                swapZone.getZoneFile().copyMemory(survivedIdx.idx.offset, newCacheOffset, survivedIdx.idx.length);
+                swapZone.getRadix().put(survivedIdx.key, new PixelsCacheIdx(newCacheOffset, survivedIdx.idx.length));
+                newCacheOffset += survivedIdx.idx.length;
+            }
+            swapZone.flushIndex();
+            PixelsZoneUtil.setStatus(swapZone.getZoneFile(), PixelsZoneUtil.ZoneStatus.OK.getId());
+            PixelsZoneUtil.setSize(swapZone.getZoneFile(), newCacheOffset);
+            swapZone.changeZoneTypeS2L();
+            PixelsZoneUtil.endIndexWrite(swapIndexFile);
+            // change zone type from lazy to swap
+            try
+            {
+                PixelsZoneUtil.beginIndexWrite(zone.getIndexFile());
+            }catch (InterruptedException e)
+            {
+                status = -1;
+                logger.error("Failed to get write permission on index.", e);
+                // TODO: other zones' recovery needed here.
+                return status;
+            }
+            zoneTypeInfo.getLazyZoneIds().
+            zone.changeZoneTypeL2S();
+            PixelsZoneUtil.endIndexWrite(zone.getIndexFile());
         }
-        for (PixelsCacheEntry survivedIdx : survivedIdxes)
-        {
-            cacheFile.copyMemory(survivedIdx.idx.offset, newCacheOffset, survivedIdx.idx.length);
-            newRadix.put(survivedIdx.key, new PixelsCacheIdx(newCacheOffset, survivedIdx.idx.length));
-            newCacheOffset += survivedIdx.idx.length;
-        }
-        this.radix = newRadix;
-        // flush index
-        flushIndex();
-        // set rwFlag as readable
-        PixelsCacheUtil.endIndexWrite(indexFile);
-        oldRadix.removeAll();
-        PixelsCacheUtil.setCacheStatus(cacheFile, PixelsCacheUtil.CacheStatus.OK.getId());
-        PixelsCacheUtil.setCacheSize(cacheFile, newCacheOffset);
-        // save the survived column chunks into cachedColumnChunks.
         this.cachedColumnChunks.addAll(survivedColumnChunks);
-        logger.debug("Cache compaction finished, index ends at offset: " + currentIndexOffset);
 
         /**
          * Start phase 2: load and append new cache elements to the cache file.

@@ -56,5 +56,6 @@ class PixelsHasher {
             var1 = 31 * var1 + bytes[var3];
         }
         return var1 % bucketNum;
+        // TODO: lazyZoneId 可能不是连续的
     }
 }

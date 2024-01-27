@@ -34,19 +34,22 @@ import java.util.List;
  */
 public class PixelsZoneWriter {
     private final static Logger logger = LogManager.getLogger(PixelsZoneUtil.class);
-    public final MemoryMappedFile zoneFile;
-    public final MemoryMappedFile indexFile;
-    public PixelsRadix radix;
-    public long currentIndexOffset;
-    public long allocatedIndexOffset = PixelsZoneUtil.INDEX_RADIX_OFFSET;
-    public long cacheOffset = PixelsZoneUtil.ZONE_DATA_OFFSET; // this is only used in the write() method.
+    private final MemoryMappedFile zoneFile;
+    private final int zoneId;
+    private PixelsZoneUtil.ZoneType zoneType;// TODO
+    private final MemoryMappedFile indexFile;
+    private PixelsRadix radix;
+    private long currentIndexOffset;
+    private long allocatedIndexOffset = PixelsZoneUtil.INDEX_RADIX_OFFSET;
+    private long cacheOffset = PixelsZoneUtil.ZONE_DATA_OFFSET; // this is only used in the write() method.
     private ByteBuffer nodeBuffer = ByteBuffer.allocate(8 * 256);
     private ByteBuffer cacheIdxBuffer = ByteBuffer.allocate(PixelsCacheIdx.SIZE);
 
-    public PixelsZoneWriter(String builderZoneLocation, String builderIndexLocation, long builderZoneSize, long builderIndexSize) throws Exception {
+    public PixelsZoneWriter(String builderZoneLocation, String builderIndexLocation, long builderZoneSize, long builderIndexSize, int zoneId) throws Exception {
         this.nodeBuffer.order(ByteOrder.BIG_ENDIAN);
-        zoneFile = new MemoryMappedFile(builderZoneLocation, builderZoneSize);
-        indexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
+        this.zoneFile = new MemoryMappedFile(builderZoneLocation, builderZoneSize);
+        this.indexFile = new MemoryMappedFile(builderIndexLocation, builderIndexSize);
+        this.zoneId = zoneId;
     }
 
     public void buildLazy(PixelsCacheConfig cacheConfig) throws Exception {
@@ -199,5 +202,27 @@ public class PixelsZoneWriter {
         for (RadixNode n : node.getChildren().values()) {
             visitRadix(cacheIdxes, n);
         }
+    }
+
+    public int getZoneId() {
+        return zoneId;
+    }
+
+    /**
+     * Change zone type from lazy to swap.
+     */
+    public void changeZoneTypeL2S() {
+        PixelsZoneUtil.setType(zoneFile, PixelsZoneUtil.ZoneType.SWAP.getId());
+        PixelsZoneUtil.setSize(zoneFile, 0);
+        PixelsZoneUtil.setStatus(zoneFile, PixelsZoneUtil.ZoneStatus.EMPTY.getId());
+        radix.removeAll();
+        radix = new PixelsRadix();
+    }
+
+    /**
+     * Change zone type from swap to lazy.
+     */
+    public void changeZoneTypeS2L() {
+        PixelsZoneUtil.setType(zoneFile, PixelsZoneUtil.ZoneType.LAZY.getId());
     }
 }
