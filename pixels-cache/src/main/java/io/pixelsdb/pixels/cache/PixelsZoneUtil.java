@@ -30,6 +30,7 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * Created at: 2024/1/20
@@ -126,11 +127,12 @@ class PixelsZoneUtil {
         }
     }
 
-    public static void initializeIndex(MemoryMappedFile indexFile) {
+    public static void initializeGlobalIndex(MemoryMappedFile indexFile, PixelsBucketToZoneMap bucketToZoneMap) {
         // init index
         setMagic(indexFile);
         clearIndexRWAndCount(indexFile);
         setIndexVersion(indexFile, 0);
+        bucketToZoneMap.initialize();
     }
 
     public static void initializeLazy(MemoryMappedFile indexFile, MemoryMappedFile zoneFile) {
