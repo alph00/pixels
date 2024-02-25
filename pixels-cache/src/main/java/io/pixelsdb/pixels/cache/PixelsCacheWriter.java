@@ -398,23 +398,7 @@ public class PixelsCacheWriter
         Compact compact = layout.getCompact();
         int cacheBorder = compact.getCacheBorder();
         List<String> cacheColumnChunkOrders = compact.getColumnChunkOrder().subList(0, cacheBorder);
-        // set rwFlag as write
-        logger.debug("Set index rwFlag as write");
-        try
-        {
-            /**
-             * Before updating the cache content, in beginIndexWrite:
-             * 1. Set rwFlag to block subsequent readers.
-             * 2. Wait for the existing readers to finish, i.e.
-             *    wait for the readCount to be cleared (become zero).
-             */
-            PixelsZoneUtil.beginIndexWrite(globalIndexFile);
-        } catch (InterruptedException e)
-        {
-            status = -1;
-            logger.error("Failed to get write permission on index.", e);
-            return status;
-        }
+
 
         // update cache content
         if (cachedColumnChunks == null || cachedColumnChunks.isEmpty())
@@ -425,78 +409,97 @@ public class PixelsCacheWriter
         {
             cachedColumnChunks.clear();
         }
-        long currCacheOffset = PixelsZoneUtil.ZONE_DATA_OFFSET;
-        boolean enableAbsoluteBalancer = Boolean.parseBoolean(
-                ConfigFactory.Instance().getProperty("enable.absolute.balancer"));
-        outer_loop:
-        for (String file : files)
+        for(int j=0; j<bucketTypeInfo.getLazyBucketNum(); ++j)
         {
-            if (enableAbsoluteBalancer && storage.hasLocality())
+            // get origin lazy zone
+            int bucketId = bucketTypeInfo.getLazyBucketIds().get(j);
+            // TODO: if lock is needed here?
+            int zoneId = bucketToZoneMap.getBucketToZone(bucketId);
+            PixelsZoneWriter zone = zones.get(zoneId);
+            // set rwFlag as write
+            logger.debug("Set index rwFlag as write");
+            try
             {
-                // TODO: this is used for experimental purpose only.
-                // may be removed later.
-                file = ensureLocality(file);
-            }
-            PixelsPhysicalReader pixelsPhysicalReader = new PixelsPhysicalReader(storage, file);
-            int physicalLen;
-            long physicalOffset;
-            // update radix and cache content
-            for (int i = 0; i < cacheColumnChunkOrders.size(); i++)
+                /**
+                 * Before updating the cache content, in beginIndexWrite:
+                 * 1. Set rwFlag to block subsequent readers.
+                 * 2. Wait for the existing readers to finish, i.e.
+                 *    wait for the readCount to be cleared (become zero).
+                 */
+                PixelsZoneUtil.beginIndexWrite(zone.getIndexFile());
+            } catch (InterruptedException e)
             {
-                String[] columnChunkIdStr = cacheColumnChunkOrders.get(i).split(":");
-                short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
-                short columnId = Short.parseShort(columnChunkIdStr[1]);
-                PixelsCacheKey key = new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId);
-                // TODO: if lock is needed here?
-                int zoneId = bucketToZoneMap.getBucketToZone(PixelsHasher.getHash(key));
-                PixelsProto.RowGroupFooter rowGroupFooter = pixelsPhysicalReader.readRowGroupFooter(rowGroupId);
-                PixelsProto.ColumnChunkIndex chunkIndex =
-                        rowGroupFooter.getRowGroupIndexEntry().getColumnChunkIndexEntries(columnId);
-                physicalLen = (int) chunkIndex.getChunkLength();
-                physicalOffset = chunkIndex.getChunkOffset();
-                if (currCacheOffset + physicalLen >= zones.get(zoneId).getZoneFile().getSize())
+                status = -1;
+                logger.error("Failed to get write permission on index.", e);
+                return status;
+            }
+
+            long currCacheOffset = PixelsZoneUtil.ZONE_DATA_OFFSET;
+            boolean enableAbsoluteBalancer = Boolean.parseBoolean(
+                    ConfigFactory.Instance().getProperty("enable.absolute.balancer"));
+            outer_loop:
+            for (String file : files)
+            {
+                if (enableAbsoluteBalancer && storage.hasLocality())
                 {
-                    logger.debug("Cache writes have exceeded cache size. Break. Current size: " + currCacheOffset);
-                    status = 2;
-                    break outer_loop;
+                    // TODO: this is used for experimental purpose only.
+                    // may be removed later.
+                    file = ensureLocality(file);
                 }
-                else
+                PixelsPhysicalReader pixelsPhysicalReader = new PixelsPhysicalReader(storage, file);
+                int physicalLen;
+                long physicalOffset;
+                // update radix and cache content
+                for (int i = 0; i < cacheColumnChunkOrders.size(); i++)
                 {
-                    zones.get(zoneId).getRadix().put(new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId),
-                            new PixelsCacheIdx(currCacheOffset, physicalLen));
-                    byte[] columnChunk = pixelsPhysicalReader.read(physicalOffset, physicalLen);
-                    zones.get(zoneId).getZoneFile().setBytes(currCacheOffset, columnChunk);
-                    logger.debug(
-                            "Cache write: " + file + "-" + rowGroupId + "-" + columnId + ", offset: " + currCacheOffset + ", length: " + columnChunk.length);
-                    currCacheOffset += physicalLen;
+                    String[] columnChunkIdStr = cacheColumnChunkOrders.get(i).split(":");
+                    short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
+                    short columnId = Short.parseShort(columnChunkIdStr[1]);
+                    PixelsCacheKey key = new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId);
+                    if(PixelsHasher.getHash(key) != bucketId){
+                        continue;
+                    }
+
+                    PixelsProto.RowGroupFooter rowGroupFooter = pixelsPhysicalReader.readRowGroupFooter(rowGroupId);
+                    PixelsProto.ColumnChunkIndex chunkIndex =
+                            rowGroupFooter.getRowGroupIndexEntry().getColumnChunkIndexEntries(columnId);
+                    physicalLen = (int) chunkIndex.getChunkLength();
+                    physicalOffset = chunkIndex.getChunkOffset();
+                    if (currCacheOffset + physicalLen >= zone.getZoneFile().getSize())
+                    {
+                        logger.debug("Cache writes have exceeded bucket size. Break. Current size: " + currCacheOffset + "current bucketId: " + bucketId);
+                        status = 2;
+                        break outer_loop;
+                    }
+                    else
+                    {
+                        zone.getRadix().put(new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId),
+                                new PixelsCacheIdx(currCacheOffset, physicalLen));
+                        byte[] columnChunk = pixelsPhysicalReader.read(physicalOffset, physicalLen);
+                        zone.getZoneFile().setBytes(currCacheOffset, columnChunk);
+                        logger.debug(
+                                "Cache write: " + file + "-" + rowGroupId + "-" + columnId + ", offset: " + currCacheOffset + ", length: " + columnChunk.length);
+                        currCacheOffset += physicalLen;
+                    }
                 }
             }
+
+            // flush index
+            zone.flushIndex();
+            // update cache version
+            PixelsZoneUtil.setIndexVersion(zone.getIndexFile(), version);
+            PixelsZoneUtil.setStatus(zone.getZoneFile(), PixelsZoneUtil.ZoneStatus.OK.getId());
+            PixelsZoneUtil.setSize(zone.getZoneFile(), currCacheOffset);
+            // set rwFlag as readable
+            PixelsZoneUtil.endIndexWrite(zone.getIndexFile());
+            // logger.debug("Cache index ends at offset: " + currentIndexOffset);
+            logger.debug("Writer ends at offset: " + currCacheOffset);
         }
+
         for (String cachedColumnChunk : cacheColumnChunkOrders)
         {
             cachedColumnChunks.add(cachedColumnChunk);
         }
-        logger.debug("Cache writer ends at offset: " + currCacheOffset);
-        // flush index
-        for(Integer bucketId:bucketTypeInfo.getLazyBucketIds())
-        {
-            // TODO: if lock is needed here?
-            int zoneId = bucketToZoneMap.getBucketToZone(bucketId);
-            zones.get(zoneId).flushIndex();
-        }
-        // update cache version
-        PixelsZoneUtil.setIndexVersion(globalIndexFile, version);
-        for(Integer bucketId:bucketTypeInfo.getLazyBucketIds())
-        {
-            // TODO: if lock is needed here?
-            int zoneId = bucketToZoneMap.getBucketToZone(bucketId);
-            PixelsZoneUtil.setStatus(zones.get(zoneId).getZoneFile(), PixelsZoneUtil.ZoneStatus.OK.getId());
-            PixelsZoneUtil.setSize(zones.get(zoneId).getZoneFile(), currCacheOffset);
-        }
-        // set rwFlag as readable
-        PixelsZoneUtil.endIndexWrite(globalIndexFile);
-        // logger.debug("Cache index ends at offset: " + currentIndexOffset);
-
         return status;
     }
 
@@ -674,7 +677,18 @@ public class PixelsCacheWriter
             // update bucketToZoneMap to let this bucketId point to the old swap zone.
             bucketToZoneMap.updateBucketZoneMap(bucketId,swapZoneId);
             // change zone type from lazy to swap
+            try
+            {
+                PixelsZoneUtil.beginIndexWrite(zone.getIndexFile());
+            }catch (InterruptedException e)
+            {
+                status = -1;
+                logger.error("Failed to get write permission on bucketToZoneMap.", e);
+                return status;
+            }
             zone.changeZoneTypeL2S();
+            PixelsCacheUtil.setIndexVersion(zone.getIndexFile(), version);
+            PixelsZoneUtil.endIndexWrite(zone.getIndexFile());
             bucketToZoneMap.updateBucketZoneMap(swapBucketId,zoneId);
             bucketToZoneMap.endWrite(swapBucketId);
         }
