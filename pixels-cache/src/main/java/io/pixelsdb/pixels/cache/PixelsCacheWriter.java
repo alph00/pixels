@@ -49,6 +49,7 @@ public class PixelsCacheWriter
 {
     private final static Logger logger = LogManager.getLogger(PixelsCacheWriter.class);
 
+    private final PixelsLocator locator;
     private final List<PixelsZoneWriter> zones;
     private final PixelsBucketTypeInfo bucketTypeInfo;
     private final PixelsBucketToZoneMap bucketToZoneMap;
@@ -62,7 +63,8 @@ public class PixelsCacheWriter
     private final String host;
     private Set<String> cachedColumnChunks = new HashSet<>();
 
-    private PixelsCacheWriter(List<PixelsZoneWriter> zones,
+    private PixelsCacheWriter(PixelsLocator locator,
+                              List<PixelsZoneWriter> zones,
                               PixelsBucketTypeInfo bucketTypeInfo,
                               PixelsBucketToZoneMap bucketToZoneMap,
                               MemoryMappedFile globalIndexFile,
@@ -71,7 +73,8 @@ public class PixelsCacheWriter
                               EtcdUtil etcdUtil,
                               String host)
     {
-        this.zones= zones;
+        this.locator = locator;
+        this.zones = zones;
         this.storage = storage;
         this.etcdUtil = etcdUtil;
         this.host = host;
@@ -232,13 +235,13 @@ public class PixelsCacheWriter
             }
 
             // initialize the hashFunction with the number of zones.
-            PixelsHasher.setBucketNum(bucketTypeInfo.getLazyBucketNum());
+            PixelsLocator locator = new PixelsLocator(zoneNum);
 
             EtcdUtil etcdUtil = EtcdUtil.Instance();
 
             Storage storage = StorageFactory.Instance().getStorage(cacheConfig.getStorageScheme());
 
-            return new PixelsCacheWriter(zones, bucketTypeInfo, bucketToZoneMap, globalIndexFile, storage,
+            return new PixelsCacheWriter(locator, zones, bucketTypeInfo, bucketToZoneMap, globalIndexFile, storage,
                     cachedColumnChunks, etcdUtil, builderHostName);
         }
     }
@@ -456,7 +459,7 @@ public class PixelsCacheWriter
                     short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                     short columnId = Short.parseShort(columnChunkIdStr[1]);
                     PixelsCacheKey key = new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId);
-                    if(PixelsHasher.getHash(key) != bucketId){
+                    if(locator.getLocation(key) != bucketId){
                         continue;
                     }
 
@@ -552,7 +555,7 @@ public class PixelsCacheWriter
                 String[] columnChunkIdStr = survivedColumnChunk.split(":");
                 short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                 short columnId = Short.parseShort(columnChunkIdStr[1]);
-                int bucketId = PixelsHasher.getHash(new PixelsCacheKey(blockId, rowGroupId, columnId));
+                long bucketId = locator.getLocation(new PixelsCacheKey(blockId, rowGroupId, columnId));
                 // TODO: if lock is needed here?
                 int zoneId = bucketToZoneMap.getBucketToZone(bucketId);
                 PixelsZoneWriter zone = zones.get(zoneId);
@@ -594,7 +597,7 @@ public class PixelsCacheWriter
             // copy the survived cache elements to the swap zone.
             for(PixelsCacheEntry survivedIdx:survivedIdxes)
             {
-                if(PixelsHasher.getHash(survivedIdx.key) != bucketId){
+                if(locator.getLocation(survivedIdx.key) != bucketId){
                     continue;
                 }
                 swapZone.getZoneFile().copyMemory(survivedIdx.idx.offset, newCacheOffset, survivedIdx.idx.length);
@@ -632,7 +635,7 @@ public class PixelsCacheWriter
                     String[] columnChunkIdStr = newCachedColumnChunks.get(i).split(":");
                     short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                     short columnId = Short.parseShort(columnChunkIdStr[1]);
-                    if(PixelsHasher.getHash(new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId)) != bucketId){
+                    if(locator.getLocation(new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId)) != bucketId){
                         continue;
                     }
                     PixelsProto.RowGroupFooter rowGroupFooter = pixelsPhysicalReader.readRowGroupFooter(rowGroupId);

@@ -59,7 +59,7 @@ public class PixelsBucketToZoneMap {
         return true;
     }
 
-    public int getBucketToZone(Integer bucketId) {
+    public int getBucketToZone(long bucketId) {
         return indexFile.getIntVolatile(this.startOfMap + bucketId << this.stepOfSlot);
     }
 
