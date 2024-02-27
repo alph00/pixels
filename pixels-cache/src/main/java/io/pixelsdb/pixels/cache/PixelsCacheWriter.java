@@ -500,6 +500,9 @@ public class PixelsCacheWriter
         {
             cachedColumnChunks.add(cachedColumnChunk);
         }
+        // update cache version
+        // TODO: if this necessary?
+        PixelsZoneUtil.setIndexVersion(globalIndexFile, version);
         return status;
     }
 
@@ -700,6 +703,9 @@ public class PixelsCacheWriter
         {
             this.cachedColumnChunks.add(newColumnChunk);
         }
+        // TODO: if this necessary?
+        // update cache version
+        PixelsZoneUtil.setIndexVersion(globalIndexFile, version);
         return status;
     }
 
