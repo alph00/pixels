@@ -251,6 +251,11 @@ public class PixelsCacheWriter
         return new Builder();
     }
 
+    public MemoryMappedFile getIndexFile()
+    {
+        return globalIndexFile;
+    }
+
     public MemoryMappedFile getIndexFile(int zoneId)
     {
         return zones.get(zoneId).getIndexFile();
@@ -582,15 +587,15 @@ public class PixelsCacheWriter
             PixelsZoneWriter zone = zones.get(zoneId);
             // get swap zone
             int swapBucketId = bucketTypeInfo.getSwapBucketIds().get(0);
-            try
-            {
-                bucketToZoneMap.beginWrite(swapBucketId);
-            }catch (InterruptedException e)
-            {
-                status = -1;
-                logger.error("Failed to get write permission on bucketToZoneMap.", e);
-                return status;
-            }
+//            try
+//            {
+//                bucketToZoneMap.beginWrite(swapBucketId);
+//            }catch (InterruptedException e)
+//            {
+//                status = -1;
+//                logger.error("Failed to get write permission on bucketToZoneMap.", e);
+//                return status;
+//            }
             int swapZoneId = bucketToZoneMap.getBucketToZone(swapBucketId);
             PixelsZoneWriter swapZone = zones.get(swapZoneId);
             MemoryMappedFile swapIndexFile = swapZone.getIndexFile();
@@ -696,7 +701,7 @@ public class PixelsCacheWriter
             PixelsCacheUtil.setIndexVersion(zone.getIndexFile(), version);
             PixelsZoneUtil.endIndexWrite(zone.getIndexFile());
             bucketToZoneMap.updateBucketZoneMap(swapBucketId,zoneId);
-            bucketToZoneMap.endWrite(swapBucketId);
+//            bucketToZoneMap.endWrite(swapBucketId);
         }
         // TODO: if moved here correctly?
         this.cachedColumnChunks.clear();

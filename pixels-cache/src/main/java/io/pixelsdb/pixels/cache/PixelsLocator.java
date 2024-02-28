@@ -36,7 +36,7 @@ class PixelsLocator {
     // the number of hash slots, copy from Redis
     private static final int NUM_HASH_SLOTS = 16384;
     // the suffix of virtual node
-    private static final String VNODE_SUFFIX = "V&&";
+    private static final String VNODE_SUFFIX = "VNODE&&";
     // the prefix of node
     private static final String NODE_PREFIX = "BUCKET#";
 
