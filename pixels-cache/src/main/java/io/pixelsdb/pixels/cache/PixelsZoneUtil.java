@@ -168,7 +168,7 @@ class PixelsZoneUtil {
     }
 
     private static void setMagic(MemoryMappedFile file) {
-        file.setBytes(0, Constants.MAGIC.getBytes(StandardCharsets.UTF_8));
+        file.setBytes(0, Constants.FILE_MAGIC.getBytes(StandardCharsets.UTF_8));
     }
 
     public static String getMagic(MemoryMappedFile file) {
@@ -186,7 +186,7 @@ class PixelsZoneUtil {
 
     public static boolean checkMagic(MemoryMappedFile file) {
         String magic = getMagic(file);
-        return magic.equalsIgnoreCase(Constants.MAGIC);
+        return magic.equalsIgnoreCase(Constants.FILE_MAGIC);
     }
 
     private static void clearIndexRWAndCount(MemoryMappedFile indexFile) {

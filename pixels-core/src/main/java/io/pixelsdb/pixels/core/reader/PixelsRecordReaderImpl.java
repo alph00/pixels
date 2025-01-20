@@ -628,7 +628,7 @@ public class PixelsRecordReaderImpl implements PixelsRecordReader
                 short rgId = columnChunkId.rowGroupId;
                 short colId = columnChunkId.columnId;
 //                long getBegin = System.nanoTime();
-                ByteBuffer columnChunk = cacheReader.get(blockId, rgId, colId, columnChunkId.direct);
+                ByteBuffer columnChunk = cacheReader.get(blockId, rgId, colId);
                 memoryUsage += columnChunkId.direct ? 0 : columnChunk.capacity();
 //                long getEnd = System.nanoTime();
 //                logger.debug("[cache get]: " + columnChunk.length + "," + (getEnd - getBegin));

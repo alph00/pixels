@@ -104,8 +104,8 @@ public class CacheWorker implements Server
             {
                 // 1. init cache writer and metadata service.
                 this.cacheWriter = PixelsCacheWriter.newBuilder()
-                        .setCacheLocation(cacheConfig.getCacheLocation())
-                        .setCacheSize(cacheConfig.getCacheSize())
+                        .setZoneLocation(cacheConfig.getCacheLocation())
+                        .setZoneSize(cacheConfig.getCacheSize())
                         .setIndexLocation(cacheConfig.getIndexLocation())
                         .setIndexSize(cacheConfig.getIndexSize())
                         .setOverwrite(false)
@@ -116,8 +116,8 @@ public class CacheWorker implements Server
 
                 // 2. update cache if necessary.
                 // If the cache is new created using start-vm.sh script, the local cache version would be zero.
-                localCacheVersion = PixelsCacheUtil.getIndexVersion(cacheWriter.getIndexFile(), cacheWriter.getCacheFile());
-                logger.debug("Local cache version: " + localCacheVersion);
+                localCacheVersion = PixelsCacheUtil.getIndexVersion(cacheWriter.getIndexFile(), cacheWriter);
+                logger.debug("Local cache global version: " + localCacheVersion);
                 // If Pixels has been reset by reset-pixels.sh, the cache version in etcd would be zero too.
                 KeyValue globalCacheVersionKV = EtcdUtil.Instance().getKeyValue(Constants.CACHE_VERSION_LITERAL);
                 if (globalCacheVersionKV != null)

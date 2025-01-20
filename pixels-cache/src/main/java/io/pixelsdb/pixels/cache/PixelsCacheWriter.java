@@ -20,6 +20,7 @@
 package io.pixelsdb.pixels.cache;
 
 import io.etcd.jetcd.KeyValue;
+import io.pixelsdb.pixels.common.metadata.MetadataService;
 import io.pixelsdb.pixels.common.metadata.domain.Compact;
 import io.pixelsdb.pixels.common.metadata.domain.Layout;
 import io.pixelsdb.pixels.common.physical.*;
@@ -206,16 +207,15 @@ public class PixelsCacheWriter
                             logger.warn("zone type error");
                     }
                 }
+                // TODO: how to pass SchemaTableName?
                 // build cachedColumnChunks for PixelsCacheWriter.
-                int cachedVersion = PixelsZoneUtil.getIndexVersion(globalIndexFile);
-                MetadataService metadataService = new MetadataService(
-                        cacheConfig.getMetaHost(), cacheConfig.getMetaPort());
-                Layout cachedLayout = metadataService.getLayout(
-                        cacheConfig.getSchema(), cacheConfig.getTable(), cachedVersion);
-                Compact compact = cachedLayout.getCompact();
-                int cacheBorder = compact.getCacheBorder();
-                cachedColumnChunks.addAll(compact.getColumnChunkOrder().subList(0, cacheBorder));
-                metadataService.shutdown();
+//                int cachedVersion = PixelsZoneUtil.getIndexVersion(globalIndexFile);
+//                MetadataService metadataService = MetadataService.Instance();
+//                Layout cachedLayout = metadataService.getLayout(
+//                        cacheConfig.getSchemaName(), cacheConfig.getSchemaName(), cachedVersion);
+//                Compact compact = cachedLayout.getCompact();
+//                int cacheBorder = compact.getCacheBorder();
+//                cachedColumnChunks.addAll(compact.getColumnChunkOrder().subList(0, cacheBorder));
             }
             else
             {
@@ -452,7 +452,7 @@ public class PixelsCacheWriter
                     // update radix and cache content
                     for (String cacheColumnChunkOrder : cacheColumnChunkOrders)
                     {
-                        String[] columnChunkIdStr = cacheColumnChunkOrders.split(":");
+                        String[] columnChunkIdStr = cacheColumnChunkOrder.split(":");
                         short rowGroupId = Short.parseShort(columnChunkIdStr[0]);
                         short columnId = Short.parseShort(columnChunkIdStr[1]);
                         PixelsCacheKey key = new PixelsCacheKey(pixelsPhysicalReader.getCurrentBlockId(), rowGroupId, columnId);
@@ -496,10 +496,7 @@ public class PixelsCacheWriter
             logger.debug("Writer ends at offset: " + currCacheOffset);
         }
 
-        for (String cachedColumnChunk : cacheColumnChunkOrders)
-        {
-            cachedColumnChunks.add(cachedColumnChunk);
-        }
+        cachedColumnChunks.addAll(cacheColumnChunkOrders);
         // update cache version
         // TODO: if this necessary?
         PixelsZoneUtil.setIndexVersion(globalIndexFile, version);
